@@ -11,14 +11,14 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.server.sessions.*
 import kotlinx.serialization.Serializable
 
-// ── Data classes (contratos JSON) ─────────────────────────────────────────────
+// ── Schemas ───────────────────────────────────────────────────────────────────
 
 @Serializable
 data class MoodRequest(
     val mood: String,
-    val uid: String? = null,
     val limit: Int = 10,
 )
 
@@ -26,6 +26,8 @@ data class MoodRequest(
 data class LogicEngineRequest(
     val text: String,
     val limit: Int,
+    val accessToken: String? = null,   // token del usuario para guardar playlist
+    val userId: String? = null,
 )
 
 @Serializable
@@ -47,6 +49,8 @@ data class LogicEngineResponse(
     val energy: Double,
     val danceability: Double,
     val tracks: List<TrackOut>,
+    val playlistId: String? = null,
+    val playlistUrl: String? = null,
 )
 
 @Serializable
@@ -54,12 +58,14 @@ data class GatewayResponse(
     val sentiment: String,
     val compound: Double,
     val tracks: List<TrackOut>,
+    val playlistId: String? = null,
+    val playlistUrl: String? = null,
 )
 
 @Serializable
 data class ErrorResponse(val error: String)
 
-// ── HTTP Client compartido ────────────────────────────────────────────────────
+// ── HTTP Client ───────────────────────────────────────────────────────────────
 
 val httpClient = HttpClient(CIO) {
     install(ContentNegotiation) { json() }
@@ -76,7 +82,10 @@ fun Application.configureRouting() {
             call.respond(mapOf("status" to "ok", "service" to "api-gateway"))
         }
 
-        // POST /mood  ← recibe petición desde Flutter
+        // Rutas de autenticación OAuth2
+        spotifyAuthRoutes(httpClient)
+
+        // POST /mood — genera playlist (con o sin autenticación)
         post("/mood") {
             val request = runCatching { call.receive<MoodRequest>() }.getOrNull()
                 ?: return@post call.respond(
@@ -91,11 +100,18 @@ fun Application.configureRouting() {
                 )
             }
 
-            // Reenvía al Logic Engine (Python)
+            // Si el usuario está autenticado, pasamos su token al Logic Engine
+            val session = call.sessions.get<UserSession>()
+
             val engineResponse = runCatching {
                 httpClient.post("$logicEngineUrl/analyze") {
                     contentType(ContentType.Application.Json)
-                    setBody(LogicEngineRequest(text = request.mood, limit = request.limit))
+                    setBody(LogicEngineRequest(
+                        text        = request.mood,
+                        limit       = request.limit,
+                        accessToken = session?.accessToken,
+                        userId      = session?.spotifyUserId,
+                    ))
                 }.body<LogicEngineResponse>()
             }.getOrElse { e ->
                 return@post call.respond(
@@ -104,14 +120,13 @@ fun Application.configureRouting() {
                 )
             }
 
-            call.respond(
-                HttpStatusCode.OK,
-                GatewayResponse(
-                    sentiment = engineResponse.sentiment,
-                    compound = engineResponse.compound,
-                    tracks = engineResponse.tracks,
-                ),
-            )
+            call.respond(HttpStatusCode.OK, GatewayResponse(
+                sentiment   = engineResponse.sentiment,
+                compound    = engineResponse.compound,
+                tracks      = engineResponse.tracks,
+                playlistId  = engineResponse.playlistId,
+                playlistUrl = engineResponse.playlistUrl,
+            ))
         }
     }
 }

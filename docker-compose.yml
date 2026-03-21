@@ -1,7 +1,6 @@
-
- 
 services:
- 
+
+  # ── Python / FastAPI ─────────────────────────────────────────────────────────
   logic-engine:
     build:
       context: ./logic-engine
@@ -11,8 +10,21 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks:
+      - moodify-internal
     restart: unless-stopped
- 
+
+  # ── Kotlin / Ktor ────────────────────────────────────────────────────────────
   api-gateway:
     build:
       context: ./api-gateway
@@ -20,12 +32,28 @@ services:
     container_name: moodify-api-gateway
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       - LOGIC_ENGINE_URL=http://logic-engine:8000
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
+      - JWT_SECRET=${JWT_SECRET}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 20s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
     depends_on:
-      - logic-engine
+      logic-engine:
+        condition: service_healthy
+    networks:
+      - moodify-internal
     restart: unless-stopped
- 
+
 networks:
-  default:
+  moodify-internal:
     name: moodify-network
+    driver: bridge
