@@ -1,26 +1,11 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 void main() => runApp(const MoodifyApp());
 
-class MoodifyApp extends StatelessWidget {
-  const MoodifyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Moodify Me',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: Colors.deepPurple,
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      home: const MoodifyScreen(),
-    );
-  }
-}
+const _gatewayUrl = 'http://localhost:8080';
 
 // ── Modelos ───────────────────────────────────────────────────────────────────
 
@@ -55,23 +40,32 @@ class PlaylistResult {
   final String sentiment;
   final double compound;
   final List<Track> tracks;
+  final String? playlistUrl;
 
   PlaylistResult({
     required this.sentiment,
     required this.compound,
     required this.tracks,
+    this.playlistUrl,
   });
 
   factory PlaylistResult.fromJson(Map<String, dynamic> json) => PlaylistResult(
         sentiment: json['sentiment'],
         compound: (json['compound'] as num).toDouble(),
         tracks: (json['tracks'] as List).map((t) => Track.fromJson(t)).toList(),
+        playlistUrl: json['playlistUrl'],
       );
 }
 
-// ── Servicio API ──────────────────────────────────────────────────────────────
+// ── Sesión de usuario ─────────────────────────────────────────────────────────
 
-const _gatewayUrl = 'http://localhost:8080'; // Cambiar en producción
+class UserSession {
+  final String accessToken;
+  final String userId;
+  UserSession({required this.accessToken, required this.userId});
+}
+
+// ── Servicio API ──────────────────────────────────────────────────────────────
 
 Future<PlaylistResult> fetchPlaylist(String mood) async {
   final response = await http.post(
@@ -79,13 +73,43 @@ Future<PlaylistResult> fetchPlaylist(String mood) async {
     headers: {'Content-Type': 'application/json'},
     body: jsonEncode({'mood': mood, 'limit': 10}),
   );
-
   if (response.statusCode != 200) {
     final body = jsonDecode(response.body);
     throw Exception(body['error'] ?? 'Error desconocido');
   }
-
   return PlaylistResult.fromJson(jsonDecode(response.body));
+}
+
+Future<void> sendFeedback(String trackId, bool liked, String mood) async {
+  await http.post(
+    Uri.parse('$_gatewayUrl/feedback?track_id=$trackId&liked=$liked&mood=${Uri.encodeComponent(mood)}'),
+  );
+}
+
+Future<String> getLoginUrl() async {
+  final response = await http.get(Uri.parse('$_gatewayUrl/auth/login'));
+  final body = jsonDecode(response.body);
+  return body['loginUrl'];
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+class MoodifyApp extends StatelessWidget {
+  const MoodifyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Moodify Me',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorSchemeSeed: Colors.deepPurple,
+        useMaterial3: true,
+        brightness: Brightness.dark,
+      ),
+      home: const MoodifyScreen(),
+    );
+  }
 }
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -102,6 +126,10 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
   PlaylistResult? _result;
   bool _loading = false;
   String? _error;
+  UserSession? _session;
+
+  // Feedback: trackId → true(like) / false(dislike)
+  final Map<String, bool> _feedback = {};
 
   Future<void> _generate() async {
     final text = _controller.text.trim();
@@ -111,6 +139,7 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
       _loading = true;
       _error = null;
       _result = null;
+      _feedback.clear();
     });
 
     try {
@@ -121,6 +150,25 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
     } finally {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loginWithSpotify() async {
+    try {
+      final url = await getLoginUrl();
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (e) {
+      setState(() => _error = 'No se pudo iniciar el login: $e');
+    }
+  }
+
+  void _logout() {
+    setState(() => _session = null);
+    http.post(Uri.parse('$_gatewayUrl/auth/logout'));
+  }
+
+  Future<void> _sendFeedback(String trackId, bool liked) async {
+    setState(() => _feedback[trackId] = liked);
+    await sendFeedback(trackId, liked, _controller.text.trim());
   }
 
   Color _sentimentColor(String sentiment) => switch (sentiment) {
@@ -144,30 +192,57 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header
               const SizedBox(height: 12),
+
+              // Header + botón de sesión
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Spacer(),
+                  Text(
+                    '🎵 Moodify Me',
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.deepPurpleAccent,
+                        ),
+                  ),
+                  const Spacer(),
+                  // Botón login / logout
+                  _session == null
+                      ? IconButton(
+                          tooltip: 'Conectar con Spotify',
+                          icon: const Icon(Icons.login, color: Colors.greenAccent),
+                          onPressed: _loginWithSpotify,
+                        )
+                      : IconButton(
+                          tooltip: 'Cerrar sesión',
+                          icon: const Icon(Icons.logout, color: Colors.redAccent),
+                          onPressed: _logout,
+                        ),
+                ],
+              ),
+
+              const SizedBox(height: 4),
               Text(
-                '🎵 Moodify Me',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.deepPurpleAccent,
+                _session == null
+                    ? 'Escribe cómo te sentís y te armo una playlist'
+                    : '✅ Conectado a Spotify — tu playlist se guardará automáticamente',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: _session == null
+                          ? null
+                          : Colors.greenAccent.withOpacity(0.8),
                     ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Escribe cómo te sentís y te armo una playlist',
-                style: Theme.of(context).textTheme.bodyMedium,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 28),
+
+              const SizedBox(height: 20),
 
               // Mood input
               TextField(
                 controller: _controller,
                 maxLines: 3,
                 decoration: InputDecoration(
-                  hintText: 'ej: "estoy relajado pero con ganas de concentrarme"',
+                  hintText: 'ej: "estoy relajado 😊" o "me siento 🔥 hoy"',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -177,7 +252,7 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Botón
+              // Botón generar
               FilledButton.icon(
                 onPressed: _loading ? null : _generate,
                 icon: _loading
@@ -196,7 +271,7 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
 
               // Error
               if (_error != null)
@@ -211,6 +286,7 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
 
               // Resultados
               if (_result != null) ...[
+                // Sentimiento detectado
                 Row(
                   children: [
                     Text(
@@ -227,13 +303,48 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                     ),
                   ],
                 ),
+
+                // Link a playlist guardada en Spotify
+                if (_result!.playlistUrl != null) ...[
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: () => launchUrl(
+                      Uri.parse(_result!.playlistUrl!),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1DB954).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF1DB954).withOpacity(0.4)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.open_in_new, size: 16, color: Color(0xFF1DB954)),
+                          SizedBox(width: 6),
+                          Text(
+                            'Ver playlist guardada en Spotify',
+                            style: TextStyle(color: Color(0xFF1DB954), fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+
                 const SizedBox(height: 12),
+
+                // Lista de canciones con feedback
                 Expanded(
                   child: ListView.separated(
                     itemCount: _result!.tracks.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, i) {
                       final track = _result!.tracks[i];
+                      final feedbackGiven = _feedback[track.id];
+
                       return ListTile(
                         leading: CircleAvatar(
                           backgroundColor: Colors.deepPurple.withOpacity(0.3),
@@ -244,22 +355,55 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                         ),
                         title: Text(track.name),
                         subtitle: Text(track.artist),
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              'V ${(track.valence * 100).round()}%',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.greenAccent.withOpacity(0.8),
-                              ),
+                            // Métricas
+                            Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'V ${(track.valence * 100).round()}%',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.greenAccent.withOpacity(0.8),
+                                  ),
+                                ),
+                                Text(
+                                  'E ${(track.energy * 100).round()}%',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.orangeAccent.withOpacity(0.8),
+                                  ),
+                                ),
+                              ],
                             ),
-                            Text(
-                              'E ${(track.energy * 100).round()}%',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.orangeAccent.withOpacity(0.8),
+                            const SizedBox(width: 8),
+                            // Botones de feedback
+                            IconButton(
+                              icon: Icon(
+                                Icons.thumb_up,
+                                size: 18,
+                                color: feedbackGiven == true
+                                    ? Colors.greenAccent
+                                    : Colors.white24,
                               ),
+                              onPressed: () => _sendFeedback(track.id, true),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton(
+                              icon: Icon(
+                                Icons.thumb_down,
+                                size: 18,
+                                color: feedbackGiven == false
+                                    ? Colors.redAccent
+                                    : Colors.white24,
+                              ),
+                              onPressed: () => _sendFeedback(track.id, false),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
                             ),
                           ],
                         ),
