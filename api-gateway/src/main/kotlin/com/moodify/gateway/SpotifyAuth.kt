@@ -122,7 +122,7 @@ fun Route.spotifyAuthRoutes(client: HttpClient) {
 
         // Redirige a Flutter con el token
         call.respondRedirect(
-            "http://localhost:57795/#/callback?token=${tokenResponse.accessToken}&userId=${userProfile.id}"
+            "http://localhost:3000/#/callback?token=${tokenResponse.accessToken}&userId=${userProfile.id}"
         )
     }
 

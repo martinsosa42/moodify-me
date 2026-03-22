@@ -57,8 +57,6 @@ class PlaylistResult {
       );
 }
 
-// ── Sesión de usuario ─────────────────────────────────────────────────────────
-
 class UserSession {
   final String accessToken;
   final String userId;
@@ -67,11 +65,11 @@ class UserSession {
 
 // ── Servicio API ──────────────────────────────────────────────────────────────
 
-Future<PlaylistResult> fetchPlaylist(String mood) async {
+Future<PlaylistResult> fetchPlaylist(String prompt) async {
   final response = await http.post(
     Uri.parse('$_gatewayUrl/mood'),
     headers: {'Content-Type': 'application/json'},
-    body: jsonEncode({'mood': mood, 'limit': 10}),
+    body: jsonEncode({'mood': prompt, 'limit': 10}),
   );
   if (response.statusCode != 200) {
     final body = jsonDecode(response.body);
@@ -80,9 +78,9 @@ Future<PlaylistResult> fetchPlaylist(String mood) async {
   return PlaylistResult.fromJson(jsonDecode(response.body));
 }
 
-Future<void> sendFeedback(String trackId, bool liked, String mood) async {
+Future<void> sendFeedback(String trackId, bool liked, String prompt) async {
   await http.post(
-    Uri.parse('$_gatewayUrl/feedback?track_id=$trackId&liked=$liked&mood=${Uri.encodeComponent(mood)}'),
+    Uri.parse('$_gatewayUrl/feedback?track_id=$trackId&liked=$liked&mood=${Uri.encodeComponent(prompt)}'),
   );
 }
 
@@ -92,6 +90,14 @@ Future<String> getLoginUrl() async {
   return body['loginUrl'];
 }
 
+// ── Ejemplos de prompts ───────────────────────────────────────────────────────
+
+const _examples = [
+  'Progressive para un atardecer',
+  'Jazz para estudiar de noche',
+  'Rock argentino',
+];
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 class MoodifyApp extends StatelessWidget {
@@ -100,7 +106,7 @@ class MoodifyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Moodify Me',
+      title: 'Moodify',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorSchemeSeed: Colors.deepPurple,
@@ -127,8 +133,6 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
   bool _loading = false;
   String? _error;
   UserSession? _session;
-
-  // Feedback: trackId → true(like) / false(dislike)
   final Map<String, bool> _feedback = {};
 
   Future<void> _generate() async {
@@ -171,86 +175,113 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
     await sendFeedback(trackId, liked, _controller.text.trim());
   }
 
-  Color _sentimentColor(String sentiment) => switch (sentiment) {
-        'positive' => Colors.greenAccent,
-        'negative' => Colors.redAccent,
-        _ => Colors.amberAccent,
-      };
-
-  String _sentimentEmoji(String sentiment) => switch (sentiment) {
-        'positive' => '😊',
-        'negative' => '😔',
-        _ => '😐',
-      };
+  void _useExample(String example) {
+    _controller.text = example;
+    _generate();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 12),
 
-              // Header + botón de sesión
+              // Header
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Spacer(),
-                  Text(
-                    '🎵 Moodify Me',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.deepPurpleAccent,
-                        ),
+                  Column(
+                    children: [
+                      Text(
+                        'Moodify',
+                        style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.deepPurpleAccent,
+                              letterSpacing: 1.2,
+                            ),
+                      ),
+                      Text(
+                        'Tu lenguaje. Tu playlist.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.white38,
+                              letterSpacing: 0.5,
+                            ),
+                      ),
+                    ],
                   ),
-                  const Spacer(),
-                  // Botón login / logout
-                  _session == null
-                      ? IconButton(
-                          tooltip: 'Conectar con Spotify',
-                          icon: const Icon(Icons.login, color: Colors.greenAccent),
-                          onPressed: _loginWithSpotify,
-                        )
-                      : IconButton(
-                          tooltip: 'Cerrar sesión',
-                          icon: const Icon(Icons.logout, color: Colors.redAccent),
-                          onPressed: _logout,
-                        ),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: _session == null
+                          ? IconButton(
+                              tooltip: 'Conectar con Spotify',
+                              icon: const Icon(Icons.login, color: Colors.greenAccent),
+                              onPressed: _loginWithSpotify,
+                            )
+                          : IconButton(
+                              tooltip: 'Cerrar sesión',
+                              icon: const Icon(Icons.logout, color: Colors.redAccent),
+                              onPressed: _logout,
+                            ),
+                    ),
+                  ),
                 ],
               ),
 
-              const SizedBox(height: 4),
-              Text(
-                _session == null
-                    ? 'Escribe cómo te sentís y te armo una playlist'
-                    : '✅ Conectado a Spotify — tu playlist se guardará automáticamente',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: _session == null
-                          ? null
-                          : Colors.greenAccent.withOpacity(0.8),
-                    ),
-                textAlign: TextAlign.center,
-              ),
+              if (_session != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '✅ Conectado a Spotify — tu playlist se guardará automáticamente',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.greenAccent.withOpacity(0.8),
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
 
               const SizedBox(height: 20),
 
-              // Mood input
+              // Input
               TextField(
                 controller: _controller,
                 maxLines: 3,
                 decoration: InputDecoration(
-                  hintText: 'ej: "estoy relajado 😊" o "me siento 🔥 hoy"',
+                  hintText: 'Describí la playlist que querés en español o inglés...',
+                  hintStyle: TextStyle(color: Colors.white24),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   filled: true,
                 ),
                 onSubmitted: (_) => _generate(),
               ),
-              const SizedBox(height: 12),
+
+              const SizedBox(height: 10),
+
+              // Ejemplos
+              SizedBox(
+                height: 32,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _examples.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => ActionChip(
+                    label: Text(
+                      _examples[i],
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    onPressed: () => _useExample(_examples[i]),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
 
               // Botón generar
               FilledButton.icon(
@@ -261,7 +292,7 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.headphones),
+                    : const Icon(Icons.queue_music),
                 label: Text(_loading ? 'Generando...' : 'Generar Playlist'),
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
@@ -286,25 +317,24 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
 
               // Resultados
               if (_result != null) ...[
-                // Sentimiento detectado
                 Row(
                   children: [
-                    Text(
-                      _sentimentEmoji(_result!.sentiment),
-                      style: const TextStyle(fontSize: 20),
+                    Icon(
+                      Icons.auto_awesome,
+                      size: 16,
+                      color: Colors.deepPurpleAccent.withOpacity(0.8),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Text(
-                      'Sentimiento: ${_result!.sentiment}  (${_result!.compound.toStringAsFixed(2)})',
+                      '${_result!.tracks.length} canciones encontradas',
                       style: TextStyle(
-                        color: _sentimentColor(_result!.sentiment),
-                        fontWeight: FontWeight.w600,
+                        color: Colors.white60,
+                        fontSize: 13,
                       ),
                     ),
                   ],
                 ),
 
-                // Link a playlist guardada en Spotify
                 if (_result!.playlistUrl != null) ...[
                   const SizedBox(height: 8),
                   GestureDetector(
@@ -334,9 +364,9 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                   ),
                 ],
 
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
 
-                // Lista de canciones con feedback
+                // Lista de canciones
                 Expanded(
                   child: ListView.separated(
                     itemCount: _result!.tracks.length,
@@ -346,61 +376,51 @@ class _MoodifyScreenState extends State<MoodifyScreen> {
                       final feedbackGiven = _feedback[track.id];
 
                       return ListTile(
+                        dense: true,
                         leading: CircleAvatar(
+                          radius: 16,
                           backgroundColor: Colors.deepPurple.withOpacity(0.3),
                           child: Text(
                             '${i + 1}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                           ),
                         ),
-                        title: Text(track.name),
-                        subtitle: Text(track.artist),
+                        title: Text(track.name, style: const TextStyle(fontSize: 14)),
+                        subtitle: Text(track.artist, style: const TextStyle(fontSize: 12)),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Métricas
                             Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(
                                   'V ${(track.valence * 100).round()}%',
                                   style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.greenAccent.withOpacity(0.8),
+                                    fontSize: 10,
+                                    color: Colors.greenAccent.withOpacity(0.7),
                                   ),
                                 ),
                                 Text(
                                   'E ${(track.energy * 100).round()}%',
                                   style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.orangeAccent.withOpacity(0.8),
+                                    fontSize: 10,
+                                    color: Colors.orangeAccent.withOpacity(0.7),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(width: 8),
-                            // Botones de feedback
+                            const SizedBox(width: 4),
                             IconButton(
-                              icon: Icon(
-                                Icons.thumb_up,
-                                size: 18,
-                                color: feedbackGiven == true
-                                    ? Colors.greenAccent
-                                    : Colors.white24,
-                              ),
+                              icon: Icon(Icons.thumb_up, size: 16,
+                                  color: feedbackGiven == true ? Colors.greenAccent : Colors.white24),
                               onPressed: () => _sendFeedback(track.id, true),
                               padding: EdgeInsets.zero,
                               constraints: const BoxConstraints(),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 2),
                             IconButton(
-                              icon: Icon(
-                                Icons.thumb_down,
-                                size: 18,
-                                color: feedbackGiven == false
-                                    ? Colors.redAccent
-                                    : Colors.white24,
-                              ),
+                              icon: Icon(Icons.thumb_down, size: 16,
+                                  color: feedbackGiven == false ? Colors.redAccent : Colors.white24),
                               onPressed: () => _sendFeedback(track.id, false),
                               padding: EdgeInsets.zero,
                               constraints: const BoxConstraints(),

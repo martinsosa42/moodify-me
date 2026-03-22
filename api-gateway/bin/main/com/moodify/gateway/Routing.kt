@@ -13,6 +13,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.sessions.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,11 @@ data class ErrorResponse(val error: String)
 // ── HTTP Client ───────────────────────────────────────────────────────────────
 
 val httpClient = HttpClient(CIO) {
-    install(ContentNegotiation) { json() }
+    install(ContentNegotiation) {
+        json(Json {
+            ignoreUnknownKeys = true
+        })
+    }
 }
 
 val logicEngineUrl = System.getenv("LOGIC_ENGINE_URL") ?: "http://localhost:8000"

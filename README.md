@@ -1,158 +1,83 @@
-# 🎵 Moodify Me
+🎵 Moodify
+Moodify convierte lenguaje humano en playlists de Spotify.
+Escribís lo que querés escuchar — en cualquier forma, en cualquier idioma — y Moodify lo interpreta y te arma la playlist.
 
-Aplicación políglota que genera playlists de Spotify basadas en tu estado de ánimo.
+"Progressive para un atardecer"
+"Jazz  para estudiar de noche"
+"Rock argentino de los 90"
 
-```
-Flutter (Dart)  →  API Gateway (Kotlin/Ktor)  →  Logic Engine (Python/FastAPI)  →  Spotify API
-```
+¿Cómo funciona?
 
----
+El usuario escribe un prompt en lenguaje natural
+El API Gateway (Kotlin/Ktor) recibe la petición y la reenvía al motor de análisis
+El Logic Engine (Python/FastAPI) analiza el texto con VADER, detecta el sentimiento y busca canciones en Spotify que coincidan
+Si el usuario está autenticado con Spotify, la playlist se guarda automáticamente en su cuenta
+Flutter muestra los resultados con la opción de dar feedback por canción
 
-## Estructura del proyecto
 
-```
-moodify-me/
-├── flutter-app/              # Interfaz móvil (Dart/Flutter)
-│   ├── lib/
-│   │   └── main.dart
+Arquitectura
+Usuario
+  │
+  ▼
+Flutter App — localhost:3000
+  │  POST /mood { "mood": "texto libre del usuario" }
+  ▼
+API Gateway (Kotlin/Ktor) — puerto 8080
+  │  Routing, OAuth2, comunicación entre servicios
+  ▼
+Logic Engine (Python/FastAPI) — puerto 8000
+  │  Análisis de sentimiento (VADER) + búsqueda en Spotify
+  ▼
+Spotify API
+
+Tecnologías
+CapaTecnologíaFrontendFlutter / DartAPI GatewayKotlin / KtorLogic EnginePython / FastAPIAnálisis NLPVADER SentimentMúsicaSpotify API (Spotipy)AuthSpotify OAuth2InfraestructuraDocker / Docker Compose
+
+Estructura del proyecto
+moodify/
+├── flutter-app/
+│   ├── lib/main.dart
 │   └── pubspec.yaml
-│
-├── api-gateway/              # Gateway central (Kotlin/Ktor)
+├── api-gateway/
 │   ├── src/main/kotlin/com/moodify/gateway/
-│   │   ├── Application.kt
-│   │   └── Routing.kt
+│   │   ├── Application.kt       # Servidor + CORS + Sessions
+│   │   ├── Routing.kt           # Endpoints + cliente HTTP
+│   │   └── SpotifyAuth.kt       # OAuth2 flow completo
 │   ├── build.gradle.kts
 │   └── Dockerfile
-│
-├── logic-engine/             # Análisis de sentimiento + Spotify (Python/FastAPI)
-│   ├── main.py
+├── logic-engine/
+│   ├── main.py                  # Análisis + Spotify search + guardar playlist
 │   ├── requirements.txt
 │   └── Dockerfile
-│
-├── docker-compose.yml        # Levanta Ktor + FastAPI
-└── .env.example              # Variables de entorno a completar
-```
+├── docker-compose.yml
+├── .env.example
+└── .gitignore
 
----
+Cómo correr el proyecto
+Requisitos
 
-## Guía rápida — Conectar los 3 componentes en local
+Docker Desktop
+Flutter SDK
+Cuenta en Spotify for Developers
 
-### Paso 1 — Credenciales de Spotify
-
-1. Entrá a https://developer.spotify.com/dashboard y creá una aplicación.
-2. Copiá el **Client ID** y el **Client Secret**.
-3. En la raíz del proyecto:
-
-```bash
-cp .env.example .env
-# Editá .env y pegá tus credenciales
-```
-
----
-
-### Paso 2 — Levantar el backend con Docker Compose
-
-```bash
-docker compose up --build
-```
-
-Esto levanta:
-- **Logic Engine** en `http://localhost:8000`
-- **API Gateway** en `http://localhost:8080`
-
-Verificá que estén corriendo:
-
-```bash
-curl http://localhost:8000/health
-# → {"status":"ok","service":"logic-engine"}
-
-curl http://localhost:8080/health
-# → {"status":"ok","service":"api-gateway"}
-```
-
-Probá el flujo completo desde la terminal:
-
-```bash
-curl -X POST http://localhost:8080/mood \
-  -H "Content-Type: application/json" \
-  -d '{"mood": "estoy relajado pero productivo", "limit": 5}'
-```
-
----
-
-### Paso 3 — Correr la app Flutter
-
-```bash
-cd flutter-app
+Paso 1 — Credenciales
+Creá una app en el dashboard de Spotify. Agregá esta URI de redirección:
+http://127.0.0.1:8080/auth/callback
+Copiá el .env.example a .env y completá las credenciales:
+bashcp .env.example .env
+Paso 2 — Backend
+bashdocker compose up --build
+Paso 3 — Frontend
+bashcd flutter-app
 flutter pub get
-flutter run
-```
+flutter run -d chrome --web-port=3000
 
-> La app apunta a `http://localhost:8080` por defecto.
-> Si corrés en un emulador Android, reemplazá `localhost` por `10.0.2.2`.
+Variables de entorno
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:8080/auth/callback
+JWT_SECRET=
+LOGIC_ENGINE_URL=http://logic-engine:8000
 
----
-
-## Contratos de API
-
-### Flutter → API Gateway
-
-```
-POST /mood
-{
-  "mood": "string",   // texto libre del usuario
-  "limit": 10         // cantidad de canciones (default: 10)
-}
-```
-
-### API Gateway → Logic Engine
-
-```
-POST /analyze
-{
-  "text": "string",
-  "limit": 10
-}
-```
-
-### Logic Engine → API Gateway (y de vuelta a Flutter)
-
-```json
-{
-  "sentiment": "positive | neutral | negative",
-  "compound": 0.72,
-  "tracks": [
-    {
-      "id": "spotify_track_id",
-      "name": "Song Name",
-      "artist": "Artist Name",
-      "preview_url": "https://...",
-      "valence": 0.85,
-      "energy": 0.78,
-      "danceability": 0.71
-    }
-  ]
-}
-```
-
----
-
-## Desarrollo sin Docker
-
-### Logic Engine (Python)
-
-```bash
-cd logic-engine
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp ../.env.example .env   # completá las credenciales
-uvicorn main:app --reload --port 8000
-```
-
-### API Gateway (Kotlin)
-
-```bash
-cd api-gateway
-./gradlew run
-# Corre en :8080, apunta a http://localhost:8000 por defecto
-```
+Autor
+Desarrollado por Martín Sergio Sosa.
