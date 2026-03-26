@@ -140,6 +140,11 @@ def search_tracks(sp: Spotify, params: dict, limit: int) -> list[TrackOut]:
 
     scored_tracks = []
     for track in raw_tracks:
+        # Saltar tracks sin datos esenciales
+        if not track.get("id") or not track.get("name"):
+            continue
+        if not track.get("artists"):
+            continue
         af = af_map.get(track["id"], {})
         valence = af.get("valence", 0.5)
         energy = af.get("energy", 0.5)

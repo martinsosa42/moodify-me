@@ -1,4 +1,6 @@
 import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -26,27 +28,31 @@ class Track {
       this.previewUrl, required this.valence, required this.energy});
 
   factory Track.fromJson(Map<String, dynamic> json) => Track(
-        id: json['id'], name: json['name'], artist: json['artist'],
-        previewUrl: json['preview_url'],
-        valence: (json['valence'] as num).toDouble(),
-        energy: (json['energy'] as num).toDouble(),
+        id:         (json['id']     as String?) ?? '',
+        name:       (json['name']   as String?) ?? 'Desconocido',
+        artist:     (json['artist'] as String?) ?? 'Artista desconocido',
+        previewUrl:  json['preview_url'] as String?,
+        valence:    (json['valence'] as num?)?.toDouble() ?? 0.5,
+        energy:     (json['energy']  as num?)?.toDouble() ?? 0.5,
       );
 }
 
 class PlaylistResult {
-  final String sentiment;
-  final double compound;
+  final String interpretation;
+  final String queryUsed;
   final List<Track> tracks;
+  final String? playlistId;
   final String? playlistUrl;
 
-  PlaylistResult({required this.sentiment, required this.compound,
-      required this.tracks, this.playlistUrl});
+  PlaylistResult({required this.interpretation, required this.queryUsed,
+      required this.tracks, this.playlistId, this.playlistUrl});
 
   factory PlaylistResult.fromJson(Map<String, dynamic> json) => PlaylistResult(
-        sentiment: json['sentiment'],
-        compound: (json['compound'] as num).toDouble(),
-        tracks: (json['tracks'] as List).map((t) => Track.fromJson(t)).toList(),
-        playlistUrl: json['playlistUrl'],
+        interpretation: (json['interpretation'] as String?) ?? '',
+        queryUsed:      (json['query_used']     as String?) ?? '',
+        tracks: (json['tracks'] as List).map((t) => Track.fromJson(t as Map<String, dynamic>)).toList(),
+        playlistId:  json['playlistId']  as String?,
+        playlistUrl: json['playlistUrl'] as String?,
       );
 }
 
@@ -108,12 +114,29 @@ class MoodifyApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const MoodifyScreen(),
+      onGenerateRoute: (settings) {
+        // Maneja el redirect de Spotify: /callback?token=...&userId=...
+        if (settings.name != null && settings.name!.startsWith('/callback')) {
+          final uri = Uri.parse(settings.name!);
+          final token  = uri.queryParameters['token'];
+          final userId = uri.queryParameters['userId'];
+          return MaterialPageRoute(
+            builder: (_) => MoodifyScreen(
+              initialToken:  token,
+              initialUserId: userId,
+            ),
+          );
+        }
+        return null;
+      },
     );
   }
 }
 
 class MoodifyScreen extends StatefulWidget {
-  const MoodifyScreen({super.key});
+  final String? initialToken;
+  final String? initialUserId;
+  const MoodifyScreen({super.key, this.initialToken, this.initialUserId});
   @override
   State<MoodifyScreen> createState() => _MoodifyScreenState();
 }
@@ -135,6 +158,26 @@ class _MoodifyScreenState extends State<MoodifyScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+
+    // Si venimos del callback de Spotify, capturamos el token de la URL
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkCallbackFromUrl();
+    });
+  }
+
+  void _checkCallbackFromUrl() {
+    // Leer directamente de la URL del browser en Flutter Web
+    final href = html.window.location.href;
+    final uri = Uri.parse(href);
+    final token  = widget.initialToken  ?? uri.queryParameters['token'];
+    final userId = widget.initialUserId ?? uri.queryParameters['userId'];
+    if (token != null && userId != null && _session == null) {
+      setState(() {
+        _session = UserSession(accessToken: token, userId: userId);
+      });
+      // Limpiar los params de la URL sin recargar la página
+      html.window.history.replaceState(null, '', '/');
+    }
   }
 
   @override
@@ -415,7 +458,7 @@ class _MoodifyScreenState extends State<MoodifyScreen>
                                   border: Border.all(color: _green.withOpacity(0.3)),
                                 ),
                                 child: Text(
-                                  '${_result!.tracks.length} canciones · ${_result!.sentiment}',
+                                  '${_result!.tracks.length} canciones · ${_result!.interpretation}',
                                   style: const TextStyle(fontSize: 12, color: _green),
                                 ),
                               ),
