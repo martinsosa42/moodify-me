@@ -1,4 +1,4 @@
-package com.moodify.gateway
+package com.synapsify.gateway
 
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -35,7 +35,7 @@ fun Application.module() {
     }
 
     install(Sessions) {
-        cookie<UserSession>("moodify_session") {
+        cookie<UserSession>("synapsify_session") {
             cookie.httpOnly = true
             cookie.maxAgeInSeconds = 3600
         }

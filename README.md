@@ -1,5 +1,4 @@
-🎵 Moodify
-Moodify convierte lenguaje humano en playlists de Spotify.
+🎵 Synapsify convierte lenguaje humano en playlists de Spotify.
 Escribís lo que querés escuchar — en cualquier forma, en cualquier idioma — y Moodify lo interpreta y te arma la playlist.
 
 "Progressive para un atardecer"

@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
-void main() => runApp(const MoodifyApp());
+void main() => runApp(const SynapsifyApp());
 
 const _gatewayUrl = 'http://localhost:8080';
 const _green = Color(0xFF1DB954);
@@ -39,17 +39,15 @@ class Track {
 
 class PlaylistResult {
   final String interpretation;
-  final String queryUsed;
   final List<Track> tracks;
   final String? playlistId;
   final String? playlistUrl;
 
-  PlaylistResult({required this.interpretation, required this.queryUsed,
+  PlaylistResult({required this.interpretation,
       required this.tracks, this.playlistId, this.playlistUrl});
 
   factory PlaylistResult.fromJson(Map<String, dynamic> json) => PlaylistResult(
         interpretation: (json['interpretation'] as String?) ?? '',
-        queryUsed:      (json['query_used']     as String?) ?? '',
         tracks: (json['tracks'] as List).map((t) => Track.fromJson(t as Map<String, dynamic>)).toList(),
         playlistId:  json['playlistId']  as String?,
         playlistUrl: json['playlistUrl'] as String?,
@@ -77,11 +75,6 @@ Future<PlaylistResult> fetchPlaylist(String prompt) async {
   return PlaylistResult.fromJson(jsonDecode(response.body));
 }
 
-Future<void> sendFeedback(String trackId, bool liked, String prompt) async {
-  await http.post(Uri.parse(
-      '$_gatewayUrl/feedback?track_id=$trackId&liked=$liked&mood=${Uri.encodeComponent(prompt)}'));
-}
-
 Future<String> getLoginUrl() async {
   final response = await http.get(Uri.parse('$_gatewayUrl/auth/login'));
   return jsonDecode(response.body)['loginUrl'];
@@ -95,13 +88,13 @@ const _examples = [
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
-class MoodifyApp extends StatelessWidget {
-  const MoodifyApp({super.key});
+class SynapsifyApp extends StatelessWidget {
+  const SynapsifyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Moodify',
+      title: 'Synapsify',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -113,7 +106,7 @@ class MoodifyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const MoodifyScreen(),
+      home: const SynapsifyScreen(),
       onGenerateRoute: (settings) {
         // Maneja el redirect de Spotify: /callback?token=...&userId=...
         if (settings.name != null && settings.name!.startsWith('/callback')) {
@@ -121,7 +114,7 @@ class MoodifyApp extends StatelessWidget {
           final token  = uri.queryParameters['token'];
           final userId = uri.queryParameters['userId'];
           return MaterialPageRoute(
-            builder: (_) => MoodifyScreen(
+            builder: (_) => SynapsifyScreen(
               initialToken:  token,
               initialUserId: userId,
             ),
@@ -133,22 +126,21 @@ class MoodifyApp extends StatelessWidget {
   }
 }
 
-class MoodifyScreen extends StatefulWidget {
+class SynapsifyScreen extends StatefulWidget {
   final String? initialToken;
   final String? initialUserId;
-  const MoodifyScreen({super.key, this.initialToken, this.initialUserId});
+  const SynapsifyScreen({super.key, this.initialToken, this.initialUserId});
   @override
-  State<MoodifyScreen> createState() => _MoodifyScreenState();
+  State<SynapsifyScreen> createState() => _SynapsifyScreenState();
 }
 
-class _MoodifyScreenState extends State<MoodifyScreen>
+class _SynapsifyScreenState extends State<SynapsifyScreen>
     with TickerProviderStateMixin {
   final _controller = TextEditingController();
   PlaylistResult? _result;
   bool _loading = false;
   String? _error;
   UserSession? _session;
-  final Map<String, bool> _feedback = {};
   late AnimationController _pulseController;
 
   @override
@@ -159,14 +151,12 @@ class _MoodifyScreenState extends State<MoodifyScreen>
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    // Si venimos del callback de Spotify, capturamos el token de la URL
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkCallbackFromUrl();
     });
   }
 
   void _checkCallbackFromUrl() {
-    // Leer directamente de la URL del browser en Flutter Web
     final href = html.window.location.href;
     final uri = Uri.parse(href);
     final token  = widget.initialToken  ?? uri.queryParameters['token'];
@@ -175,7 +165,6 @@ class _MoodifyScreenState extends State<MoodifyScreen>
       setState(() {
         _session = UserSession(accessToken: token, userId: userId);
       });
-      // Limpiar los params de la URL sin recargar la página
       html.window.history.replaceState(null, '', '/');
     }
   }
@@ -189,7 +178,7 @@ class _MoodifyScreenState extends State<MoodifyScreen>
   Future<void> _generate() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    setState(() { _loading = true; _error = null; _result = null; _feedback.clear(); });
+    setState(() { _loading = true; _error = null; _result = null; });
     try {
       final result = await fetchPlaylist(text);
       setState(() => _result = result);
@@ -407,7 +396,7 @@ class _MoodifyScreenState extends State<MoodifyScreen>
 
                         const SizedBox(height: 12),
 
-                        // Chips
+                        // Chips de ejemplos
                         Wrap(
                           spacing: 8,
                           children: _examples.map((e) => GestureDetector(
@@ -497,7 +486,6 @@ class _MoodifyScreenState extends State<MoodifyScreen>
                               itemCount: _result!.tracks.length,
                               itemBuilder: (context, i) {
                                 final track = _result!.tracks[i];
-                                final fb = _feedback[track.id];
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 6),
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -542,31 +530,6 @@ class _MoodifyScreenState extends State<MoodifyScreen>
                                           const SizedBox(height: 3),
                                           _MiniBar(label: 'E', value: track.energy,
                                               color: const Color(0xFFFF8C00)),
-                                        ],
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          _FeedbackBtn(
-                                            icon: Icons.thumb_up_outlined,
-                                            active: fb == true,
-                                            activeColor: _green,
-                                            onTap: () async {
-                                              setState(() => _feedback[track.id] = true);
-                                              await sendFeedback(track.id, true, _controller.text);
-                                            },
-                                          ),
-                                          const SizedBox(width: 4),
-                                          _FeedbackBtn(
-                                            icon: Icons.thumb_down_outlined,
-                                            active: fb == false,
-                                            activeColor: const Color(0xFFFF4444),
-                                            onTap: () async {
-                                              setState(() => _feedback[track.id] = false);
-                                              await sendFeedback(track.id, false, _controller.text);
-                                            },
-                                          ),
                                         ],
                                       ),
                                     ],
@@ -676,31 +639,6 @@ class _MiniBar extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _FeedbackBtn extends StatelessWidget {
-  final IconData icon;
-  final bool active;
-  final Color activeColor;
-  final VoidCallback onTap;
-  const _FeedbackBtn({required this.icon, required this.active,
-      required this.activeColor, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 28, height: 28,
-        decoration: BoxDecoration(
-          color: active ? activeColor.withOpacity(0.15) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: active ? activeColor.withOpacity(0.4) : Colors.transparent),
-        ),
-        child: Icon(icon, size: 14,
-            color: active ? activeColor : Colors.white.withOpacity(0.2)),
-      ),
     );
   }
 }

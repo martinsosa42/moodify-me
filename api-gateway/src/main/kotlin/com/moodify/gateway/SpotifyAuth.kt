@@ -1,4 +1,4 @@
-package com.moodify.gateway
+package com.synapsify.gateway
 
 import io.ktor.client.*
 import io.ktor.client.call.*

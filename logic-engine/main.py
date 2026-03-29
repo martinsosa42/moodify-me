@@ -1,16 +1,36 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
-from spotipy import Spotify
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from spotipy import Spotify, SpotifyClientCredentials
 from groq import Groq
 import os
 import json
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Moodify - Logic Engine", version="3.2.0")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ── App & Middleware ──────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address)
+
+app = FastAPI(title="Synapsify - Logic Engine", version="3.3.0")
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("ALLOWED_ORIGIN", "http://localhost:3000")],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 # ── Clientes ──────────────────────────────────────────────────────────────────
 
@@ -23,9 +43,10 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
+# [FIX] limit acotado entre 1 y 50 — evita abusos y errores con audio_features()
 class MoodRequest(BaseModel):
     text: str
-    limit: int = 10
+    limit: int = Field(default=10, ge=1, le=50)
     accessToken: str | None = None
     userId: str | None = None
 
@@ -84,6 +105,50 @@ Ejemplos:
 - "Techno para correr" → query: "techno running workout", energy: 0.9, tempo: 140
 """
 
+# [FIX] Whitelist de mercados válidos — evita prompt injection en el campo market
+VALID_MARKETS = {
+    "AR", "US", "ES", "MX", "BR", "CO", "CL", "PE", "UY", "PY",
+    "GB", "DE", "FR", "IT", "JP", "AU", "CA", "NZ", "ZA",
+}
+
+
+def _clamp_float(value, lo: float = 0.0, hi: float = 1.0):
+    """Retorna el valor si está en rango válido, None si no."""
+    try:
+        v = float(value)
+        return v if lo <= v <= hi else None
+    except (TypeError, ValueError):
+        return None
+
+
+# [FIX] Validación del JSON de Groq para mitigar prompt injection
+def validate_groq_params(params: dict) -> dict:
+    query = str(params.get("search_query", "")).strip()[:200]
+    if not query:
+        raise ValueError("search_query vacío o ausente en la respuesta del modelo.")
+
+    market = params.get("market", "AR")
+    if market not in VALID_MARKETS:
+        market = "AR"
+
+    tempo = params.get("target_tempo")
+    try:
+        tempo = float(tempo) if tempo is not None else None
+        if tempo is not None and not (40 <= tempo <= 220):
+            tempo = None
+    except (TypeError, ValueError):
+        tempo = None
+
+    return {
+        "search_query":        query,
+        "market":              market,
+        "interpretation":      str(params.get("interpretation", ""))[:300],
+        "target_energy":       _clamp_float(params.get("target_energy")),
+        "target_valence":      _clamp_float(params.get("target_valence")),
+        "target_danceability": _clamp_float(params.get("target_danceability")),
+        "target_tempo":        tempo,
+    }
+
 
 def interpret_with_groq(text: str) -> dict:
     """Usa Groq para convertir lenguaje natural en parámetros de Spotify."""
@@ -110,7 +175,14 @@ def interpret_with_groq(text: str) -> dict:
                 raw = part
                 break
 
-    return json.loads(raw)
+    # [FIX] JSON parse con error controlado — no expone stack interno al cliente
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error("Groq devolvió JSON inválido: %s", raw[:200])
+        raise ValueError("El modelo devolvió una respuesta con formato inválido.")
+
+    return validate_groq_params(parsed)
 
 
 # ── Helpers Spotify ───────────────────────────────────────────────────────────
@@ -140,7 +212,6 @@ def search_tracks(sp: Spotify, params: dict, limit: int) -> list[TrackOut]:
 
     scored_tracks = []
     for track in raw_tracks:
-        # Saltar tracks sin datos esenciales
         if not track.get("id") or not track.get("name"):
             continue
         if not track.get("artists"):
@@ -176,13 +247,15 @@ def search_tracks(sp: Spotify, params: dict, limit: int) -> list[TrackOut]:
     return [t for _, t in scored_tracks]
 
 
-def save_playlist(sp: Spotify, user_id: str, text: str,
+def save_playlist(sp: Spotify, text: str,
                   track_ids: list[str], interpretation: str) -> tuple[str, str]:
+    # [FIX] userId obtenido desde el token — no se acepta del cliente
+    user_id = sp.me()["id"]
     playlist = sp.user_playlist_create(
         user=user_id,
-        name=f"Moodify: {text[:40]}",
+        name=f"Synapsify: {text[:40]}",
         public=False,
-        description=f"Generada por Moodify · {interpretation}",
+        description=f"Generada por Synapsify · {interpretation}",
     )
     sp.playlist_add_items(playlist["id"], [f"spotify:track:{tid}" for tid in track_ids])
     return playlist["id"], playlist["external_urls"]["spotify"]
@@ -191,15 +264,19 @@ def save_playlist(sp: Spotify, user_id: str, text: str,
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/analyze", response_model=MoodResponse)
-async def analyze_mood(req: MoodRequest):
+@limiter.limit("10/minute")  # [FIX] Rate limiting por IP
+async def analyze_mood(req: MoodRequest, request: Request):
     if not req.text.strip():
         raise HTTPException(status_code=422, detail="El texto no puede estar vacío.")
 
     # 1. Groq interpreta el pedido
     try:
         params = interpret_with_groq(req.text)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error al interpretar con Groq: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("Error inesperado al llamar a Groq")
+        raise HTTPException(status_code=502, detail="Error al interpretar el pedido.")
 
     interpretation = params.get("interpretation", req.text)
     query_used = params.get("search_query", req.text)
@@ -210,26 +287,27 @@ async def analyze_mood(req: MoodRequest):
     # 3. Buscamos canciones
     try:
         tracks = search_tracks(sp, params, req.limit)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error Spotify: {str(e)}")
+    except Exception:
+        logger.exception("Error al buscar en Spotify")
+        raise HTTPException(status_code=502, detail="Error al buscar canciones en Spotify.")
 
     if not tracks:
         raise HTTPException(status_code=404,
                             detail="No se encontraron canciones para ese pedido.")
 
     # 4. Guardamos playlist si hay sesión activa
+    # [FIX] userId ya no viene del cliente — se obtiene del token en save_playlist()
     playlist_id, playlist_url = None, None
-    if req.accessToken and req.userId:
+    if req.accessToken:
         try:
             playlist_id, playlist_url = save_playlist(
                 sp=sp,
-                user_id=req.userId,
                 text=req.text,
                 track_ids=[t.id for t in tracks],
                 interpretation=interpretation,
             )
-        except Exception as e:
-            print(f"No se pudo guardar la playlist: {e}")
+        except Exception:
+            logger.exception("No se pudo guardar la playlist")
 
     return MoodResponse(
         interpretation=interpretation,
@@ -240,12 +318,6 @@ async def analyze_mood(req: MoodRequest):
     )
 
 
-@app.post("/feedback")
-async def save_feedback(track_id: str, liked: bool, mood: str):
-    print(f"FEEDBACK | track={track_id} | liked={liked} | mood={mood}")
-    return {"status": "ok"}
-
-
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "logic-engine", "version": "3.2.0"}
+    return {"status": "ok", "service": "synapsify-logic-engine", "version": "3.3.0"}

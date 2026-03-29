@@ -1,4 +1,4 @@
-package com.moodify.gateway
+package com.synapsify.gateway
 
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -52,15 +52,6 @@ data class LogicEngineResponse(
 )
 
 @Serializable
-data class GatewayResponse(
-    val interpretation: String,
-    val query_used: String,
-    val tracks: List<TrackOut>,
-    val playlistId: String? = null,
-    val playlistUrl: String? = null,
-)
-
-@Serializable
 data class ErrorResponse(val error: String)
 
 // ── HTTP Client ───────────────────────────────────────────────────────────────
@@ -77,7 +68,7 @@ fun Application.configureRouting() {
     routing {
 
         get("/health") {
-            call.respond(mapOf("status" to "ok", "service" to "api-gateway"))
+            call.respond(mapOf("status" to "ok", "service" to "synapsify-api-gateway"))
         }
 
         // Rutas de autenticación OAuth2
@@ -122,13 +113,7 @@ fun Application.configureRouting() {
                 )
             }
 
-            call.respond(HttpStatusCode.OK, GatewayResponse(
-                interpretation = engineResponse.interpretation,
-                query_used     = engineResponse.query_used,
-                tracks         = engineResponse.tracks,
-                playlistId     = engineResponse.playlistId,
-                playlistUrl    = engineResponse.playlistUrl,
-            ))
+            call.respond(HttpStatusCode.OK, engineResponse)
         }
     }
 }

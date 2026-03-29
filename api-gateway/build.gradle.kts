@@ -5,11 +5,11 @@ plugins {
     application
 }
 
-group = "com.moodify"
+group = "com.synapsify"
 version = "1.0.0"
 
 application {
-    mainClass.set("com.moodify.gateway.ApplicationKt")
+    mainClass.set("com.synapsify.gateway.ApplicationKt")
 }
 
 repositories {
